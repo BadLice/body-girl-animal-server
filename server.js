@@ -1,6 +1,6 @@
 var app = require('express')();
 var http = require('http').createServer(app);
-var io = require('socket.io')(http);
+var io = require('socket.io')(http, { origins: 'badlice.github.io:* http://badlice.github.io:* http://badlice.github.io:*' });
 const shortid = require('shortid');
 const { uuid } = require('uuidv4');
 
