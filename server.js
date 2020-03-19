@@ -5,24 +5,8 @@ const shortid = require('shortid');
 const { uuid } = require('uuidv4');
 
 let games = [];
-
-let users = [{
-    id: '525dd6d3-8fb0-4988-9d87-d0d76b8f23e6',
-    name: 'Alex',
-},
-{
-    id: 'bb',
-    name: 'Anna',
-},
-{
-    id: 'cc',
-    name: 'Ari',
-},
-{
-    id: 'dd',
-    name: 'Dado',
-},
-];
+let sockets = []
+let users = [];
 
 // for (let i = 0; i < 10; i++) {
 //     generateGame();
@@ -32,7 +16,7 @@ app.get('/', function (req, res) {
     res.sendFile(__dirname + '/index.html');
 });
 
-io.on('connection', function (socket) {
+io.on('connection', socket => {
     // log.info('a user connected ' + socket.id)
 
     socket.on('reqUserId', () => {
@@ -40,41 +24,43 @@ io.on('connection', function (socket) {
     });
 
     socket.on('reqGames', () => {
-        let gm = [...games]
-        gm = gm.filter(g => g.name !== null);
-
-        gm.map(game => { //serve to client also the usernames
-            game.users = [...game.users].map(u => {
-                u.name = getUserName(u.id);
-                return u
-            })
-            return game
-        })
-
-        socket.emit('getGames', gm);
+        socket.emit('getGames', getFilteredGamesForClient());
     })
 
     socket.on('reqJoinGame', gameId => {
         let success = false;
         let game = getGame(gameId);
-        if (game) {
-            let userId = getUserId(socket.id);
+        let userId = getUserId(socket.id);
+        if (game && !userIsInGame(userId, game)) {
             let username = getUserName(userId);
-        
+
             // if (userIsInGame(userId,game)) { //sync old user with actual game hands
             //     syncOldUserInGame(game,userId);
             //     success = true;
             // } else { //new game for user
+
             generateNewGameUser(game, userId, username);
             success = true;
-            // }
+            // }    
             log.info(socket.id + ' joined ' + game.id)
         }
         socket.emit('getJoinGame', success);
+        if (success) {
+            updateUsersConnectedToGame(game);
+        }
     })
 
-    socket.on('reqQuitGame', data => {
+    socket.on('reqCreateGame', () => {
+        const gameId = generateGame(socket.id);
+        socket.emit('getCreateGame', gameId);
+
+        updateUsersConnectedToGame(getGame(gameId));
+        updateGamesToSockets();
+    })
+
+    socket.on('reqQuitGame', () => {
         removeUserFromGames(socket.id);
+        removeEmptyGames();
         log.info(socket.id + ' quitted')
         socket.emit('getQuitGame');
     })
@@ -88,6 +74,7 @@ io.on('connection', function (socket) {
     })
 
     socket.on('reqSaveUsername', user => {
+        user.socketId = socket.id;
         users[users.findIndex(u => user.id === u.id)] = user;
         socket.emit('getSaveUsername', true);
     })
@@ -100,18 +87,66 @@ io.on('connection', function (socket) {
     socket.on('disconnect', () => {
         removeUserFromGames(socket.id);
     });
+
+    socket.on('startGame', (data) => {
+        let game = getGame(data.gameId);
+        game.columns = data.columns;
+        game.name = data.name;
+        game.started = true;
+    });
+
+    sockets.push(socket);
 });
 
-let generateGame = () => {
-    games.push({
-        id: shortid.generate(),
-        name: null,
-        hand: 0,
-        users: [],
-        columns: [],
+let updateGamesToSockets = () => {
+    sockets.forEach(socket => {
+        socket.emit('getGames', getFilteredGamesForClient());
     })
 }
 
+let getFilteredGamesForClient = () => {
+    let gm = [...games]
+    gm = gm.filter(g => g.users.length !== 0);
+
+    gm.map(game => { //serve to client also the usernames
+        game.users = [...game.users].map(u => {
+            u.name = getUserName(u.id);
+            return u
+        })
+        return game
+    })
+
+    return gm;
+}
+
+let getSocket = userId => {
+    let index = users.findIndex(user => user.id === userId);
+    let socketId = users[index].socketId;
+    let indexSocket = sockets.findIndex(s => s.id === socketId);
+    return sockets[indexSocket];
+}
+
+let generateGame = (socketId) => {
+    let userId = getUserId(socketId);
+    let game = {
+        id: shortid.generate(),
+        name: null,
+        started: false,
+        hand: 0,
+        users: [],
+        columns: [],
+    }
+    games.push(game);
+    generateNewGameUser(game, userId, getUserName(userId));
+    log.info('Created game: ' + game.id)
+    return game.id;
+}
+
+let updateUsersConnectedToGame = (game) => {
+    game.users.forEach(user => {
+        getSocket(user.id).emit('getUsersConnected', game.users);
+    })
+}
 
 let generateNewUser = (socketId, oldId) => {
     let id = oldId || uuid();
@@ -227,7 +262,7 @@ let generateNewGameUser = (game, userId, username) => {
     });
 }
 
-let userIsInGame = (userId,game) => {
+let userIsInGame = (userId, game) => {
     return game.users.findIndex(u => u.id === userId) !== -1;
 }
 
@@ -236,6 +271,14 @@ log = {
     info: txt => console.log('\x1b[32m%s\x1b[0m', 'INFO: ', txt),
     warn: txt => console.log('\x1b[33m%s\x1b[0m', 'WARN: ', txt),
     error: txt => console.log('\x1b[31m%s\x1b[0m', 'ERROR: ', txt),
+}
+
+
+const removeEmptyGames = () => {
+    let g = [...games];
+    g.filter(game => game.users.length !== 0);
+    games = g;
+    log.warn("Games cleared");
 }
 
 
