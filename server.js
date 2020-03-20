@@ -8,9 +8,18 @@ let games = [];
 let sockets = []
 let users = [];
 
+/*
+::::hands states::::
+playing
+waiting
+confirmed
+submitted
+*/
+
 // for (let i = 0; i < 10; i++) {
 //     generateGame();
 // }
+
 
 app.get('/', function (req, res) {
     res.sendFile(__dirname + '/index.html');
@@ -21,6 +30,20 @@ io.on('connection', socket => {
 
     socket.on('reqUserId', () => {
         socket.emit('getUserId', generateNewUser(socket.id));
+    });
+
+    socket.on('reqGameExists', gameId => {
+        socket.emit('getGameExists', games.findIndex(game => game.id === gameId) !== -1);
+    });
+
+    socket.on('hereHands', (data) => {
+        if (data.hands.length !== 0) {
+            let hands = getHands(data.gameId, data.userId);
+            setHands(data.gameId, data.userId, data.hands)        
+            console.log(data.hands[data.hands.length-1].inputs);
+            socket.emit('getHands', getHands(data.gameId, data.userId));
+            console.log(getHands(data.gameId, data.userId)[getHands(data.gameId, data.userId).length - 1].inputs)
+        }
     });
 
     socket.on('reqGames', () => {
@@ -59,14 +82,18 @@ io.on('connection', socket => {
     })
 
     socket.on('reqQuitGame', () => {
-        removeUserFromGames(socket.id);
-        removeEmptyGames();
-        log.info(socket.id + ' quitted')
-        socket.emit('getQuitGame');
+        quitUserFromGame(socket);
     })
 
     socket.on('reqColumns', gameId => {
         socket.emit('getColumns', getGame(gameId).columns);
+    })
+
+    socket.on('reqGameStarted', gameId => {
+        let game = getGame(gameId);
+        if (game) {
+            socket.emit('getGameStarted', game.started);
+        }
     })
 
     socket.on('reqHands', data => {
@@ -85,7 +112,9 @@ io.on('connection', socket => {
     })
 
     socket.on('disconnect', () => {
-        removeUserFromGames(socket.id);
+        // removeUserFromGames(socket.id);
+        quitUserFromGame(socket);
+        sockets = [...sockets].filter(s => s.id !== socket.id);
     });
 
     socket.on('startGame', (data) => {
@@ -93,10 +122,46 @@ io.on('connection', socket => {
         game.columns = data.columns;
         game.name = data.name;
         game.started = true;
+        game.hands++;
+        let character = genCharacter();
+        let inputs = [];
+        game.columns.forEach(col => {
+            inputs.push({
+                value: '',
+                score: 0,
+            })
+        })
+        game.users.map(user => {
+            user.hands.push({
+                id: uuid(),
+                character: character,
+                inputs: inputs,
+                state: 'playing',
+            });
+            return user;
+        })
+
+        log.info('Started game ' + game.id);
+
+        game.users.forEach(user => {
+
+            let s = getSocket(user.id);
+            if (s) {
+                s.emit('getGameStarted', game.started);
+                socket.emit('getHands', getHands(data.gameId, data.userId));
+            }
+        })
     });
 
     sockets.push(socket);
 });
+
+const quitUserFromGame = (socket) => {
+    removeUserFromGames(socket.id);
+    removeEmptyGames();
+    log.info(socket.id + ' quitted')
+    socket.emit('getQuitGame');
+}
 
 let updateGamesToSockets = () => {
     sockets.forEach(socket => {
@@ -120,16 +185,23 @@ let getFilteredGamesForClient = () => {
 }
 
 let getSocket = userId => {
+    let result = null;
     let index = users.findIndex(user => user.id === userId);
-    let socketId = users[index].socketId;
-    let indexSocket = sockets.findIndex(s => s.id === socketId);
-    return sockets[indexSocket];
+    if (index !== -1) {
+        let socketId = users[index].socketId;
+        let indexSocket = sockets.findIndex(s => s.id === socketId);
+        if (indexSocket !== -1) {
+            result = sockets[indexSocket];
+        }
+    }
+    return result;
 }
 
 let generateGame = (socketId) => {
     let userId = getUserId(socketId);
     let game = {
         id: shortid.generate(),
+        timer: 10,
         name: null,
         started: false,
         hand: 0,
@@ -144,7 +216,18 @@ let generateGame = (socketId) => {
 
 let updateUsersConnectedToGame = (game) => {
     game.users.forEach(user => {
-        getSocket(user.id).emit('getUsersConnected', game.users);
+        let s = getSocket(user.id);
+        let users = [...game.users];
+
+        users = users.map(user => {
+            let score = user.hands.reduce((acc, hand) => acc + hand.inputs.reduce((a, inn) => a + inn.score), 0);
+            user.score = score;
+            return user;
+        });
+
+        if (s) {
+            s.emit('getUsersConnected', users);
+        }
     })
 }
 
@@ -170,6 +253,10 @@ let getGameUser = (gameId, userId) => {
     }
 }
 
+let setHands = (gameId, userId, value) => {
+    let user = getGameUser(gameId, userId)
+    user.hands = value;
+}
 let getGame = gameId => {
     let index = games.findIndex(g => g.id === gameId)
     if (index !== -1) {
@@ -189,8 +276,17 @@ let removeUserFromGames = (socketId) => {
     if (userId) {
         games = games.map(game => {
             let users = [...game.users]
+            let wasInGame = users.findIndex(u => u.id === userId) !== -1;
             users = users.filter(u => u.id !== userId);
             game.users = users;
+            if (wasInGame) {
+                game.users.forEach(user => {
+                    let s = getSocket(user.id);
+                    if (s) {
+                        s.emit('getUsersConnected', game.users)
+                    }
+                });
+            }
             return game;
         });
     }
@@ -237,7 +333,7 @@ let syncOldUserInGame = (game, userId, username) => {
 
 let generateNewGameUser = (game, userId, username) => {
     let hands = [];
-    for (let i = 0; i < game.hand + 1; i++) {
+    for (let i = 0; i < game.hand; i++) {
 
         let inputs = [];
         for (let j = 0; j < game.columns.length; j++) {
@@ -280,6 +376,50 @@ const removeEmptyGames = () => {
     games = g;
     log.warn("Games cleared");
 }
+
+const genCharacter = () => {
+    let length = 1;
+    var result = '';
+    var characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    var charactersLength = characters.length;
+    for (var i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    return result;
+}
+
+setInterval(() => {
+    games.map(game => {
+        if (game.started && game.timer > 0) {
+            game.timer--;
+
+            game.users.forEach(user => {
+                let s = getSocket(user.id);
+                if (s) {
+                    s.emit('syncTimer', game.timer)
+                }
+            })
+        }
+
+        if (game.timer <= 0) {
+            game.users.map(user => {
+                let socket = getSocket(user.id);
+                let state = user.hands[user.hands.length - 1].state;
+                if (state === 'playing' || state === 'waiting') {
+                    state = 'confirmed';
+                } else {
+                    state = 'submitted';
+                }
+                user.hands[user.hands.length - 1].state = state;
+                game.timer = 30;
+
+                if (socket) {
+                    socket.emit('giveHands');
+                }
+            })
+        }
+    })
+}, 1000);
 
 
 //create fake game
