@@ -16,18 +16,11 @@ confirmed
 submitted
 */
 
-// for (let i = 0; i < 10; i++) {
-//     generateGame();
-// }
-
-
 app.get('/', function (req, res) {
     res.sendFile(__dirname + '/index.html');
 });
 
 io.on('connection', socket => {
-    // log.info('a user connected ' + socket.id)
-
     socket.on('reqUserId', () => {
         socket.emit('getUserId', generateNewUser(socket.id));
     });
@@ -72,15 +65,8 @@ io.on('connection', socket => {
         let userId = getUserId(socket.id);
         if (game && !userIsInGame(userId, game)) {
             let username = getUserName(userId);
-
-            // if (userIsInGame(userId,game)) { //sync old user with actual game hands
-            //     syncOldUserInGame(game,userId);
-            //     success = true;
-            // } else { //new game for user
-
             generateNewGameUser(game, userId, username);
             success = true;
-            // }    
             log.info(socket.id + ' joined ' + game.id)
         }
         socket.emit('getJoinGame', success);
@@ -222,7 +208,7 @@ let generateGame = (socketId) => {
     let userId = getUserId(socketId);
     let game = {
         id: shortid.generate(),
-        timer: 10,
+        timer: 60,
         name: null,
         started: false,
         hand: 0,
@@ -430,7 +416,7 @@ setInterval(() => {
         if (game.timer <= 0) {
             game.users.map(user => {
                 let socket = getSocket(user.id);
-                game.timer = 10;
+                game.timer = 60;
 
                 if (socket) {
                     socket.emit('handTimeout');
