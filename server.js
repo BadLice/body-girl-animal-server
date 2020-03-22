@@ -213,7 +213,7 @@ let generateGame = (socketId) => {
     let userId = getUserId(socketId);
     let game = {
         id: shortid.generate(),
-        defaultTimer: 0,
+        defaultTimer: 60,
         timer: 0,
         name: null,
         started: false,
