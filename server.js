@@ -121,9 +121,14 @@ io.on('connection', socket => {
     });
 
     socket.on('startGame', (data) => {
+
+        log.err('timer: '+data.defaultTimer)
+
         let game = getGame(data.gameId);
         game.columns = data.columns;
         game.name = data.name;
+        game.defaultTimer = data.defaultTimer;
+        game.timer = game.defaultTimer;
         game.started = true;
         generateNewHand(game);
 
@@ -208,7 +213,8 @@ let generateGame = (socketId) => {
     let userId = getUserId(socketId);
     let game = {
         id: shortid.generate(),
-        timer: 60,
+        defaultTimer: 0,
+        timer: 0,
         name: null,
         started: false,
         hand: 0,
@@ -385,7 +391,6 @@ const removeEmptyGames = () => {
     games = g;
     log.warn("Games cleared");
 
-
     sockets.forEach(socket => socket.emit('getGames', getFilteredGamesForClient()))
 }
 
@@ -416,7 +421,18 @@ setInterval(() => {
         if (game.timer <= 0) {
             game.users.map(user => {
                 let socket = getSocket(user.id);
-                game.timer = 60;
+
+                if (user.hands.length >0) {
+                    let state = user.hands[user.hands.length - 1].state;
+                    if (state === 'playing' || state === 'waiting') {
+                        state = 'confirmed';
+                        game.timer = 30;
+                    } else {
+                        state = 'submitted';
+                        game.timer = game.defaultTimer;
+                    }
+                }
+
 
                 if (socket) {
                     socket.emit('handTimeout');
